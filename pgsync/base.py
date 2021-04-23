@@ -614,6 +614,15 @@ class Base(object):
                         f'{TRIGGER_FUNC}()',
                     )
                 )
+                
+                # Enable the replication trigger on tables that are themselves populated
+                # by replication to make sure it can cascade down.
+                queries.append(
+                    sa.DDL(
+                        f'ALTER TABLE "{schema}"."{table}" '
+                        f'ENABLE ALWAYS TRIGGER {table}_{name} '
+                    )
+                )
 
         for query in queries:
             self.execute(query)
