@@ -158,10 +158,10 @@ class Sync(Base):
                 if node.relationship.foreign_key.child:
                     columns.extend(node.relationship.foreign_key.child)
                 if columns:
-                    user_defined_fkey_tables.append((node.table, columns))
+                    user_defined_fkey_tables.append((node.schema, node.table, columns))
 
             self.create_triggers(schema, tables=tables)
-            self.create_views(schema, tables, user_defined_fkey_tables)
+            self.create_views("public", tables, user_defined_fkey_tables)
         self.create_replication_slot(self.__name)
 
     def teardown(self, drop_views=True):

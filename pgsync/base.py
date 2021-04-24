@@ -392,6 +392,7 @@ class Base(object):
 
         alias = pg_class.alias('x')
         statement = sa.select([
+            pg_namespace.c.nspname.label('schema_name'),
             sa.cast(
                 sa.cast(
                     pg_index.c.indrelid,
@@ -428,11 +429,13 @@ class Base(object):
             ).in_(tables),
             pg_attribute.c.attnum == sa.any_(pg_index.c.indkey),
         ]).group_by(
+            pg_namespace.c.nspname,
             pg_index.c.indrelid
         )
 
         if PRIMARY_KEY_VIEW in views:
             values = self.fetchall(sa.select([
+                sa.column('schema_name'),
                 sa.column('table_name'),
                 sa.column('primary_keys'),
             ]).select_from(
@@ -443,10 +446,11 @@ class Base(object):
                 statement = statement.union(
                     sa.select(
                         Values(
+                            sa.column('schema_name'),
                             sa.column('table_name'),
                             sa.column('primary_keys'),
                         ).data(
-                            [(value[0], array(value[1])) for value in values]
+                            [(value[0], value[1], array(value[2])) for value in values]
                         ).alias(
                             't'
                         )
@@ -478,6 +482,7 @@ class Base(object):
             )
 
         statement = sa.select([
+            table_constraints.c.table_schema,
             table_constraints.c.table_name,
             sa.func.ARRAY_AGG(
                 sa.cast(
@@ -507,6 +512,7 @@ class Base(object):
         unions = []
         if FOREIGN_KEY_VIEW in views:
             values = self.fetchall(sa.select([
+                sa.column('table_schema'),
                 sa.column('table_name'),
                 sa.column('foreign_keys'),
             ]).select_from(
@@ -517,10 +523,11 @@ class Base(object):
                 unions.append(
                     sa.select(
                         Values(
+                            sa.column('table_schema'),
                             sa.column('table_name'),
                             sa.column('foreign_keys'),
                         ).data(
-                            [(value[0], array(value[1])) for value in values]
+                            [(value[0], value[1], array(value[2])) for value in values]
                         ).alias(
                             'u'
                         )
@@ -531,12 +538,13 @@ class Base(object):
             unions.append(
                 sa.select(
                     Values(
+                        sa.column('table_schema'),
                         sa.column('table_name'),
                         sa.column('foreign_keys'),
                     ).data(
                         [
                             (
-                                value[0], array(value[1])
+                                value[0], value[1], array(value[2])
                             ) for value in user_defined_fkey_tables
                         ]
                     ).alias(
@@ -614,7 +622,7 @@ class Base(object):
                         f'{TRIGGER_FUNC}()',
                     )
                 )
-                
+
                 # Enable the replication trigger on tables that are themselves populated
                 # by replication to make sure it can cascade down.
                 queries.append(
