@@ -847,11 +847,7 @@ class Sync(Base):
 
                 continue
 
-            try:
-                conn.poll()
-            except psycopg2.OperationalError as e:
-                logger.fatal(f'OperationalError: {e}')
-                os._exit(-1)
+            conn.poll()
 
             while conn.notifies:
                 notification = conn.notifies.pop(0)
