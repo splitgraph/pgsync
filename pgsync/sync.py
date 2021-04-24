@@ -73,7 +73,6 @@ class Sync(Base):
         self._truncate = False
         self.verbose = verbose
         self._checkpoint_file = f".{self.__name}"
-        self.redis = RedisQueue(self.__name)
         self.tree = Tree(self)
         self._last_truncate_timestamp = datetime.now()
         if validate:
@@ -777,18 +776,6 @@ class Sync(Base):
         self._checkpoint = value
 
     @threaded
-    def poll_redis(self):
-        """Consumer which polls Redis continuously."""
-        while True:
-            payloads = self.redis.bulk_pop()
-            if payloads:
-                logger.debug(
-                    f'poll_redis: {payloads}'
-                )
-                self.on_publish(payloads)
-            time.sleep(REDIS_POLL_INTERVAL)
-
-    @threaded
     def poll_db(self):
         """
         Producer which polls the replication slot and forwards messages to ElasticSearch
@@ -816,59 +803,6 @@ class Sync(Base):
                              total_rows, self.__name, txmin, txmax)
                 total_rows = 0
                 last_message = now
-
-
-    def on_publish(self, payloads):
-        """
-        Redis publish event handler.
-
-        This is triggered by poll_redis.
-        It is called when an event is received from Redis.
-        Deserialize the payload from Redis and sync to Elasticsearch.
-        """
-        logger.debug(f'on_publish len {len(payloads)}')
-
-        # Safe inserts are insert operations that can be performed in any order
-        # Optimize the safe INSERTS
-        # TODO repeat this for the other place too
-        # if all payload operations are INSERTS
-        if set(
-            map(lambda x: x['tg_op'], payloads)
-        ) == set([INSERT]):
-
-            _payloads = collections.defaultdict(list)
-
-            for payload in payloads:
-                _payloads[payload['table']].append(payload)
-
-            for _payload in _payloads.values():
-                self.sync_payloads(_payload)
-
-        else:
-
-            _payloads = []
-            for i, payload in enumerate(payloads):
-                _payloads.append(payload)
-                j = i + 1
-                if j < len(payloads):
-                    payload2 = payloads[j]
-                    if (
-                        payload['tg_op'] != payload2['tg_op'] or
-                        payload['table'] != payload2['table']
-                    ):
-                        self.sync_payloads(_payloads)
-                        _payloads = []
-                elif j == len(payloads):
-                    self.sync_payloads(_payloads)
-                    _payloads = []
-
-        txids = set(
-            map(lambda x: x['xmin'], payloads)
-        )
-        # for truncate, tg_op txids is None so skip setting the checkpoint
-        if txids != set([None]):
-            txmin = min(min(txids), self.txid_current) - 1
-            self.checkpoint = txmin
 
     def pull(self):
         """Pull data from db."""
