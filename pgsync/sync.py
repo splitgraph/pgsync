@@ -394,7 +394,7 @@ class Sync(Base):
 
                         _table = self._absolute_table(schema, table)
                         node_parent_table = self._absolute_table(
-                            schema,
+                            node.parent.schema,
                             node.parent.table,
                         )
 
@@ -426,7 +426,7 @@ class Sync(Base):
 
                         _table = self._absolute_table(schema, table)
                         node_parent_table = self._absolute_table(
-                            schema,
+                            node.parent.schema,
                             node.parent.table,
                         )
 
