@@ -88,6 +88,7 @@ class ElasticHelper(object):
             max_chunk_bytes=max_chunk_bytes,
             queue_size=queue_size,
             refresh=False,
+            raise_on_error=False
         ):
             pass
 
