@@ -141,27 +141,6 @@ class Sync(Base):
     def setup(self):
         """Create the database triggers and replication slot."""
         self.teardown(drop_views=False)
-
-        for schema in self.schemas:
-            tables = set([])
-            # tables with user defined foreign keys
-            user_defined_fkey_tables = []
-
-            root = self.tree.build(self.nodes[0])
-            for node in traverse_breadth_first(root):
-                tables |= set(node.relationship.through_tables)
-                tables |= set([node.table])
-
-                columns = []
-                if node.relationship.foreign_key.parent:
-                    columns.extend(node.relationship.foreign_key.parent)
-                if node.relationship.foreign_key.child:
-                    columns.extend(node.relationship.foreign_key.child)
-                if columns:
-                    user_defined_fkey_tables.append((node.table, columns))
-
-            self.create_triggers(schema, tables=tables)
-            self.create_views(schema, tables, user_defined_fkey_tables)
         self.create_replication_slot(self.__name)
 
     def teardown(self, drop_views=True):
@@ -273,6 +252,7 @@ class Sync(Base):
                 txmax=txmax,
                 upto_nchanges=len(rows),
             )
+        return len(rows)
 
     def _payload_data(self, payload):
         """Extract the payload data from the payload."""
@@ -811,48 +791,32 @@ class Sync(Base):
     @threaded
     def poll_db(self):
         """
-        Producer which polls Postgres continuously.
-
-        Receive a notification message from the channel we are listening on
+        Producer which polls the replication slot and forwards messages to ElasticSearch
         """
-        conn = self.engine.connect().connection
-        conn.set_isolation_level(
-            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
-        )
-        cursor = conn.cursor()
-        channel = self.database
-        cursor.execute(f'LISTEN {channel}')
-        logger.debug(f'Listening for notifications on channel "{channel}"')
-
-        i = 0
-        j = 0
+        txmin = self.checkpoint
+        txmax = self.txid_current
+        total_rows = 0
+        last_message = datetime.now()
 
         while True:
-            # NB: consider reducing POLL_TIMEOUT to increase throughout
-            if select.select(
-                [conn], [], [], POLL_TIMEOUT
-            ) == ([], [], []):
-                if i % 10 == 0:
-                    sys.stdout.write(
-                        f'Polling db {channel}: {j:,} item(s)\n'
-                    )
-                    sys.stdout.flush()
-                i += 1
-                continue
+            time.sleep(POLL_TIMEOUT)
+            logger.debug("Syncing slot %s from %s to %s", self.__name, txmin, txmax)
 
-            try:
-                conn.poll()
-            except psycopg2.OperationalError as e:
-                logger.fatal(f'OperationalError: {e}')
-                os._exit(-1)
+            # Sync up to txmax
+            rows = self.logical_slot_changes(txmin=txmin, txmax=txmax)
+            logger.debug("Synced %s row(s) from slot %s", rows, self.__name)
+            total_rows += rows
+            self.checkpoint = txmax
+            txmin = txmax
+            txmax = self.txid_current
 
-            while conn.notifies:
-                notification = conn.notifies.pop(0)
-                payload = json.loads(notification.payload)
-                self.redis.push(payload)
-                logger.debug(f'on_notify: {payload}')
-                j += 1
-            i = 0
+            now = datetime.now()
+            if (now - last_message).total_seconds() > 60:
+                logging.info("Last 60s: synced %s row(s) from slot %s, txmin %s, txmax %s",
+                             total_rows, self.__name, txmin, txmax)
+                total_rows = 0
+                last_message = now
+
 
     def on_publish(self, payloads):
         """
@@ -910,7 +874,7 @@ class Sync(Base):
         """Pull data from db."""
         txmin = self.checkpoint
         txmax = self.txid_current
-        logger.debug(f'pull txmin: {txmin} txmax: {txmax}')
+        logger.info("Initial sync, txmin = %s, txmax=%s", txmin, txmax)
         # forward pass sync
         self.sync(txmin=txmin, txmax=txmax)
         # now sync up to txmax to capture everything we might have missed
@@ -941,19 +905,11 @@ class Sync(Base):
         2. Pull everything so far and also replay replication logs.
         3. Consume all changes from Redis.
         """
-        # start a background worker producer thread to poll the db and populate
-        # the Redis cache
-        self.poll_db()
-
         # sync up to current transaction_id
         self.pull()
 
-        # start a background worker consumer thread to
-        # poll Redis and populate Elasticsearch
-        self.poll_redis()
-
-        # start a background worker thread to cleanup the replication slot
-        self.truncate_slots()
+        # start a background worker producer thread to poll the db and sync to Elasticsearch
+        self.poll_db()
 
 
 @click.command()
