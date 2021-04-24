@@ -113,10 +113,21 @@ def show_settings(schema=None, params={}):
     logger.info('-' * 65)
 
 
+def run_forever(fn):
+    def wrapper(*args, **kwargs):
+        while True:
+            try:
+                return fn(*args, **kwargs)
+            except Exception:
+                logging.exception("Toplevel exception caught, ignoring")
+                continue
+    return wrapper
+
+
 def threaded(fn):
     """Decorator for threaded code execution."""
     def wrapper(*args, **kwargs):
-        thread = threading.Thread(target=fn, args=args, kwargs=kwargs)
+        thread = threading.Thread(target=run_forever(fn), args=args, kwargs=kwargs)
         thread.start()
         return thread
     return wrapper
