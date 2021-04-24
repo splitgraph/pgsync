@@ -15,7 +15,7 @@ SCHEMA = env.str('SCHEMA', default=None)
 # db query chunk size (how many records to fetch at a time)
 QUERY_CHUNK_SIZE = env.int('QUERY_CHUNK_SIZE', default=10000)
 # poll db interval (consider reducing this duration to increase throughput)
-POLL_TIMEOUT = env.float('POLL_TIMEOUT', default=0.1)
+POLL_TIMEOUT = env.float('POLL_TIMEOUT', default=5)
 # replication slot cleanup interval (in secs)
 REPLICATION_SLOT_CLEANUP_INTERVAL = env.float(
     'REPLICATION_SLOT_CLEANUP_INTERVAL',

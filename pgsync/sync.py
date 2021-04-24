@@ -828,16 +828,23 @@ class Sync(Base):
         j = 0
 
         while True:
-            # NB: consider reducing POLL_TIMEOUT to increase throughout
+            # Blocks until there's something interesting available to read on the channel
             if select.select(
                 [conn], [], [], POLL_TIMEOUT
             ) == ([], [], []):
                 if i % 10 == 0:
-                    sys.stdout.write(
-                        f'Polling db {channel}: {j:,} item(s)\n'
+                    logging.info(
+                        f'Polling db {channel}: {j:,} item(s)'
                     )
-                    sys.stdout.flush()
                 i += 1
+
+                # https://www.postgresql.org/message-id/flat/153243441449.1404.2274116228506175596%40wrigleys.postgresql.org
+                # NOTIFY events aren't triggered from replicated tables. To get around this, we
+                # send a dummy empty NOTIFY event (which forces the queue to flush). We ignore
+                # these when pushing data to Redis. This means that changes triggered by replication
+                # won't be seen for POLL_TIMEOUT seconds.
+                cursor.execute(f"NOTIFY {channel}, '{{}}'")
+
                 continue
 
             try:
@@ -849,6 +856,8 @@ class Sync(Base):
             while conn.notifies:
                 notification = conn.notifies.pop(0)
                 payload = json.loads(notification.payload)
+                if not payload:
+                    continue
                 self.redis.push(payload)
                 logger.debug(f'on_notify: {payload}')
                 j += 1
