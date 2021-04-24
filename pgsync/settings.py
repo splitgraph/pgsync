@@ -94,7 +94,7 @@ def get_logging_config(silent_loggers=None):
         'formatters': {
             'simple': {
                 'format':
-                '%(asctime)s.%(msecs)03d:%(levelname)s:%(name)s: %(message)s',
+                '%(asctime)s.%(msecs)03d:%(levelname)s:%(threadName)s:%(name)s: %(message)s',
                 'datefmt': '%Y-%m-%d %H:%M:%S',
             },
         },
