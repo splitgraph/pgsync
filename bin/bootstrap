@@ -60,7 +60,6 @@ def main(teardown, config, user, password, host, port, verbose):
         if teardown:
             sync.teardown()
             continue
-        sync.setup()
         logger.info(f'Bootstrap: {sync.database}')
 
 

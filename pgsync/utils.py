@@ -7,6 +7,8 @@ import time
 from datetime import timedelta
 from urllib.parse import quote_plus
 
+import sqlalchemy.exc
+
 from .exc import SchemaError
 from .settings import (
     ELASTICSEARCH_HOST,
@@ -118,9 +120,12 @@ def run_forever(fn):
         while True:
             try:
                 return fn(*args, **kwargs)
-            except Exception:
-                logging.exception("Toplevel exception caught, ignoring")
+            except sqlalchemy.exc.OperationalError as e:
+                logging.warning("Uncaught toplevel exception, restarting the thread", exc_info=e)
                 continue
+            except Exception as e:
+                logging.fatal("Exception in thread", exc_info=e)
+                sys.exit(1)
     return wrapper
 
 
@@ -128,6 +133,7 @@ def threaded(fn):
     """Decorator for threaded code execution."""
     def wrapper(*args, **kwargs):
         thread = threading.Thread(target=run_forever(fn), args=args, kwargs=kwargs)
+        thread.daemon = True
         thread.start()
         return thread
     return wrapper

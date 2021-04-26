@@ -2,19 +2,17 @@
 
 """Main module."""
 import collections
-import itertools
 import json
 import logging
 import os
 import pprint
 import re
-import select
+import signal
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import click
-import psycopg2
 import sqlalchemy as sa
 
 from . import __version__
@@ -22,25 +20,22 @@ from .base import Base, compiled_query
 from .constants import (
     DELETE,
     INSERT,
-    META,
     PRIMARY_KEY_DELIMITER,
     SCHEMA,
     TG_OP,
     TRUNCATE,
-    UPDATE,
+    UPDATE, TIMESTAMP,
 )
 from .elastichelper import ElasticHelper
 from .exc import RDSError, SuperUserError
 from .node import traverse_breadth_first, traverse_post_order, Tree
 from .plugin import Plugins
 from .querybuilder import QueryBuilder
-from .redisqueue import RedisQueue
 from .settings import (
     POLL_TIMEOUT,
-    REDIS_POLL_INTERVAL,
-    REPLICATION_SLOT_CLEANUP_INTERVAL, ELASTICSEARCH_CHUNK_SIZE, QUERY_CHUNK_SIZE,
+    QUERY_CHUNK_SIZE,
 )
-from .transform import get_private_keys, transform
+from .transform import transform
 from .utils import get_config, progress, show_settings, threaded, Timer
 
 logger = logging.getLogger(__name__)
@@ -72,13 +67,13 @@ class Sync(Base):
         self._plugins = None
         self._truncate = False
         self.verbose = verbose
-        self._checkpoint_file = f".{self.__name}"
         self.tree = Tree(self)
         self._last_truncate_timestamp = datetime.now()
         if validate:
             self.validate()
             self.create_setting()
         self.query_builder = QueryBuilder(self, verbose=self.verbose)
+        self.shutdown = False
 
     def validate(self):
         """Perform all validation right away."""
@@ -137,19 +132,8 @@ class Sync(Base):
         root = self.tree.build(self.nodes[0])
         self.es._create_setting(self.index, root, setting=self.setting)
 
-    def setup(self):
-        """Create the database triggers and replication slot."""
-        self.teardown(drop_views=False)
-        self.create_replication_slot(self.__name)
-
     def teardown(self, drop_views=True):
         """Drop the database triggers and replication slot."""
-
-        try:
-            os.unlink(self._checkpoint_file)
-        except OSError:
-            pass
-
         for schema in self.schemas:
             tables = set([])
             root = self.tree.build(self.nodes[0])
@@ -159,7 +143,8 @@ class Sync(Base):
             self.drop_triggers(schema=schema, tables=tables)
             if drop_views:
                 self.drop_views(schema=schema)
-        self.drop_replication_slot(self.__name)
+
+        self.teardown_replication()
 
     def get_doc_id(self, primary_keys):
         """Get the Elasticsearch document id from the primary keys."""
@@ -167,7 +152,7 @@ class Sync(Base):
             map(str, primary_keys)
         )
 
-    def logical_slot_changes(self, txmin=None, txmax=None):
+    def logical_slot_changes(self):
         """
         Process changes from the db logical replication logs.
 
@@ -771,15 +756,35 @@ def main(
     show_settings(config, params)
 
     with Timer():
+        syncs = []
+        threads = []
+
         for document in json.load(open(config)):
             sync = Sync(
                 document,
                 verbose=verbose,
                 params=params,
             )
-            sync.pull()
-            if daemon:
-                sync.receive()
+            if not daemon:
+                sync.full_sync()
+            else:
+                threads.append(sync.receive())
+                syncs.append(sync)
+
+        if daemon:
+            def shutdown(signum, frame):
+                logger.info("Signalling threads to shut down...")
+                for s in syncs:
+                    s.shutdown = True
+
+            signal.signal(signal.SIGTERM, shutdown)
+            signal.signal(signal.SIGINT, shutdown)
+
+            while True:
+                signal.pause()
+                if all(not t.is_alive() for t in threads):
+                    logging.info("All threads shut down. Exiting.")
+                    sys.exit(0)
 
 
 if __name__ == '__main__':
