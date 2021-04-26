@@ -161,6 +161,8 @@ BUILTIN_SCHEMAS = ['information_schema']
 # Primary key identifier
 META = '_meta'
 
+TIMESTAMP = '_timestamp'
+
 # Logical decoding output plugin
 PLUGIN = 'test_decoding'
 

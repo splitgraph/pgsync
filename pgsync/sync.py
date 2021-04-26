@@ -613,7 +613,7 @@ class Sync(Base):
 
             yield doc
 
-    def sync(self, txmin=None, txmax=None):
+    def full_sync(self):
         """
         Pull sync all data from database.
 
@@ -622,47 +622,27 @@ class Sync(Base):
         document contains -> nodes:
         nodes contains -> node
         """
+
+        # We want to reload all documents into the index + delete documents that we didn't
+        # reload. Since we don't want to delete the index or empty it out (clients will see
+        # an empty index for a few seconds), we instead load data with a timestamp and then
+        # delete all docs that don't have that timestamp.
+
+        timestamp = datetime.now().isoformat()
+        logger.info("Resyncing index %s, timestamp %s", self.index, timestamp)
+
         docs = self._sync(
             self.nodes,
             self.index,
-            txmin=txmin,
-            txmax=txmax,
+            timestamp=timestamp
         )
-        try:
-            self.es.bulk(self.index, docs)
-        except Exception as e:
-            logger.exception(f'Exception {e}')
-            raise
-        self.checkpoint = txmax or self.txid_current
-
-    def sync_payloads(self, payloads):
-        """Sync payload when an event is emitted."""
-        to_delete, filters = self._payloads(
-            self.nodes,
-            self.index,
-            payloads,
-        )
-
-        logger.debug("to_delete: %s, filters: %s", to_delete, filters)
-
-        if to_delete:
-            docs = [self._make_delete_doc(d) for d in to_delete]
-            self.es.bulk(self.index, docs)
-
-        # NB: if no filters, then do not execute the sync query.
-        # This is crucial otherwise we would end up performing a full query
-        # and sync the entire db!
-        if any(filters.values()):
-            docs = self._sync(
-                self.nodes,
-                self.index,
-                filters=filters,
-            )
-        else:
-            logger.warning('No filters supplied')
-            return
-
         self.es.bulk(self.index, docs)
+
+        # Now bulk delete docs without the new timestamp
+        logger.info("Deleting old documents in index %s (timestamp not %s)",
+                    self.index, timestamp)
+        self.es.delete_old(self.index, timestamp)
+        logger.info("Full resync for index %s complete", self.index)
 
     def _make_delete_doc(self, pk):
         doc = {
@@ -753,18 +733,20 @@ class Sync(Base):
     def receive(self):
         """
         Receive events from db.
-
-        NB: pulls as well as receives in order to avoid missing data.
-
-        1. Buffer all ongoing changes from db to Redis.
-        2. Pull everything so far and also replay replication logs.
-        3. Consume all changes from Redis.
         """
-        # sync up to current transaction_id
-        self.pull()
 
-        # start a background worker producer thread to poll the db and sync to Elasticsearch
-        self.poll_db()
+        # If the replication slot doesn't exist, we create it, then do a full reload
+        if not self.replication_slots(self.__name):
+            logging.info(
+                "Replication slot %s doesn't exist. Recreating and resyncing.",
+                self.__name
+            )
+            self.create_replication_slot(self.__name)
+            self.full_sync()
+        else:
+            logging.info("Replication slot %s exists.", self.__name)
+
+        return self.poll_db()
 
 
 @click.command()

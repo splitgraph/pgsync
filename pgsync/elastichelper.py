@@ -12,7 +12,7 @@ from requests_aws4auth import AWS4Auth
 from .constants import (
     ELASTICSEARCH_MAPPING_PARAMETERS,
     ELASTICSEARCH_TYPES,
-    META,
+    META, TIMESTAMP,
 )
 from .node import traverse_post_order
 from .settings import (
@@ -91,6 +91,27 @@ class ElasticHelper(object):
             raise_on_error=False
         ):
             pass
+
+    def delete_old(
+        self,
+        index,
+        timestamp
+    ):
+        self.__es.delete_by_query(
+            index,
+            body={
+                "query": {
+                    "bool": {
+                        "must_not": {
+                            "term": {
+                                TIMESTAMP: timestamp
+                            }
+                        }
+                    }
+                }
+            },
+            conflicts="proceed"
+        )
 
     def refresh(self, indices):
         """Refresh the Elasticsearch index."""
