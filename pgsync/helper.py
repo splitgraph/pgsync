@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 def teardown(
     drop_db=True,
     truncate_db=True,
-    delete_redis=True,
     drop_index=True,
     delete_checkpoint=True,
     config=None,
@@ -39,8 +38,6 @@ def teardown(
             drop_database(sync.database)
         if drop_index:
             sync.es.teardown(sync.index)
-        if delete_redis:
-            sync.redis._delete()
         if delete_checkpoint:
             try:
                 os.unlink(sync._checkpoint_file)

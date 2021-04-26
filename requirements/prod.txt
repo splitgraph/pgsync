@@ -34,16 +34,12 @@ greenlet==1.0.0
     # via sqlalchemy
 idna==2.10
     # via requests
-importlib-metadata==4.0.1
-    # via sqlalchemy
 jmespath==0.10.0
     # via
     #   boto3
     #   botocore
 marshmallow==3.11.1
     # via environs
-newrelic==6.2.0.156
-    # via -r requirements/prod.in
 psycopg2-binary==2.8.6
     # via -r requirements/base.in
 python-dateutil==2.8.1
@@ -53,8 +49,6 @@ python-dateutil==2.8.1
     #   faker
 python-dotenv==0.17.0
     # via environs
-redis==3.5.3
-    # via -r requirements/base.in
 requests-aws4auth==1.0.1
     # via -r requirements/base.in
 requests==2.25.1
@@ -71,12 +65,8 @@ sqlparse==0.4.1
     # via -r requirements/base.in
 text-unidecode==1.3
     # via faker
-typing-extensions==3.7.4.3
-    # via importlib-metadata
 urllib3==1.26.4
     # via
     #   botocore
     #   elasticsearch
     #   requests
-zipp==3.4.1
-    # via importlib-metadata

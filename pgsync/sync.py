@@ -4,7 +4,6 @@
 import collections
 import json
 import logging
-import os
 import pprint
 import re
 import signal
@@ -36,7 +35,7 @@ from .settings import (
     QUERY_CHUNK_SIZE,
 )
 from .transform import transform
-from .utils import get_config, progress, show_settings, threaded, Timer
+from .utils import get_config, show_settings, threaded, Timer
 
 logger = logging.getLogger(__name__)
 

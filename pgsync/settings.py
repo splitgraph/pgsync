@@ -70,19 +70,6 @@ PG_PASSWORD = env.str('PG_PASSWORD', default=None)
 PG_SSLMODE = env.str('PG_SSLMODE', default=None)
 PG_SSLROOTCERT = env.str('PG_SSLROOTCERT', default=None)
 
-# Redis:
-REDIS_HOST = env.str('REDIS_HOST', default='localhost')
-REDIS_PORT = env.int('REDIS_PORT', default=6379)
-REDIS_DB = env.int('REDIS_DB', default=0)
-REDIS_AUTH = env.str('REDIS_AUTH', default=None)
-# number of items to read from Redis at a time
-REDIS_CHUNK_SIZE = env.int('REDIS_CHUNK_SIZE', default=1000)
-# redis socket connection timeout
-REDIS_SOCKET_TIMEOUT = env.int('REDIS_SOCKET_TIMEOUT', default=5)
-# redis poll interval (in secs)
-REDIS_POLL_INTERVAL = env.float('REDIS_POLL_INTERVAL', default=0.01)
-
-
 # Logging:
 def get_logging_config(silent_loggers=None):
     """
