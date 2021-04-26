@@ -318,6 +318,12 @@ class Sync(Base):
         ]
 
         """
+
+        # TODO some of this breaks in cases like FKs on non-PK columns or updates to PKs (since
+        #  logical replication doesn't give us old values and we no longer talk to ES
+        #  to get those docs). REPLICA IDENTITY FULL could solve this more elegantly if this
+        #  is ever needed again.
+
         payload = payloads[0]
         tg_op = payload['tg_op']
         if tg_op not in TG_OP:
@@ -528,9 +534,7 @@ class Sync(Base):
         nodes,
         index,
         filters=None,
-        txmin=None,
-        txmax=None,
-        extra=None,
+        timestamp=None
     ):
         if filters is None:
             filters = {}
@@ -542,26 +546,6 @@ class Sync(Base):
         for node in traverse_post_order(root):
 
             self._build_filters(filters, node)
-
-            if node.is_root:
-                if txmin:
-                    node._filters.append(
-                        sa.cast(
-                            sa.cast(
-                                node.model.c.xmin,
-                                sa.Text,
-                            ), sa.BigInteger,
-                        ) >= txmin
-                    )
-                if txmax:
-                    node._filters.append(
-                        sa.cast(
-                            sa.cast(
-                                node.model.c.xmin,
-                                sa.Text,
-                            ), sa.BigInteger,
-                        ) < txmax
-                    )
 
             try:
                 self.query_builder.build_queries(node)
@@ -577,18 +561,13 @@ class Sync(Base):
         for i, (keys, row, primary_keys) in enumerate(
             self.query_yield(node._subquery)
         ):
-
-            if i % 1000 == 0:
-                progress(i + 1, row_count)
+            if i % 10000 == 0:
+                logging.info("%s: %d/%d row(s)", index, i, row_count)
 
             row = transform(row, nodes[0])
-            row[META] = get_private_keys(keys)
-            if extra:
-                if extra['table'] not in row[META]:
-                    row[META][extra['table']] = {}
-                if extra['column'] not in row[META][extra['table']]:
-                    row[META][extra['table']][extra['column']] = []
-                row[META][extra['table']][extra['column']].append(0)
+
+            if timestamp:
+                row[TIMESTAMP] = timestamp
 
             if self.verbose:
                 print(f'{(i+1)})')
@@ -654,39 +633,18 @@ class Sync(Base):
             doc['_type'] = '_doc'
         return doc
 
-    @property
-    def checkpoint(self):
-        """Save the current txid as the checkpoint."""
-        if os.path.exists(self._checkpoint_file):
-            with open(self._checkpoint_file, 'r') as fp:
-                self._checkpoint = int(fp.read().split()[0])
-        return self._checkpoint
-
-    @checkpoint.setter
-    def checkpoint(self, value=None):
-        if value is None:
-            raise ValueError('Cannot assign a None value to checkpoint')
-        with open(self._checkpoint_file, 'w+') as fp:
-            fp.write(f'{value}\n')
-        self._checkpoint = value
-
     @threaded
     def poll_db(self):
         """
         Producer which polls the replication slot and forwards messages to ElasticSearch
         """
-        txmin = self.checkpoint
-        txmax = self.txid_current
         total_rows = 0
         last_message = datetime.now()
+        logger.info("Starting DB poll thread for slot %s, index %s", self.__name, self.index)
 
-        while True:
+        while not self.shutdown:
             time.sleep(POLL_TIMEOUT)
-            logger.debug("Syncing slot %s from %s to %s", self.__name, txmin, txmax)
-            #
-            # # forward pass sync
-            # self.sync(txmin=txmin, txmax=txmax)
-            # # Sync up to txmax
+            logger.debug("Syncing slot %s", self.__name)
             while True:
                 rows = self.logical_slot_changes()
                 logger.debug("Synced %s row(s) from slot %s", rows, self.__name)
@@ -694,41 +652,19 @@ class Sync(Base):
                 if not rows:
                     break
 
-            # self.checkpoint = txmax
-            # txmin = txmax
-            # txmax = self.txid_current
-
             now = datetime.now()
             if (now - last_message).total_seconds() > 60:
-                logging.info("Last 60s: synced %s row(s) from slot %s, txmin %s, txmax %s",
-                             total_rows, self.__name, txmin, txmax)
+                logging.info("Last 60s: synced %s row(s) from slot %s",
+                             total_rows, self.__name)
                 total_rows = 0
                 last_message = now
 
-    def pull(self):
-        """Pull data from db."""
-        txmin = self.checkpoint
-        txmax = self.txid_current
-        logger.info("Initial sync, txmin = %s, txmax=%s", txmin, txmax)
-        # forward pass sync
-        self.sync(txmin=txmin, txmax=txmax)
-        # now sync up to txmax to capture everything we might have missed
-        self.logical_slot_changes()
-        self._truncate = True
+        logging.info("Exiting gracefully...")
 
-    @threaded
-    def truncate_slots(self):
-        """Truncate the logical replication slot."""
-        while True:
-            if self._truncate and (
-                datetime.now() >= self._last_truncate_timestamp + timedelta(
-                    seconds=REPLICATION_SLOT_CLEANUP_INTERVAL
-                )
-            ):
-                logger.debug(f'Truncating replication slot: {self.__name}')
-                self.logical_slot_get_changes(self.__name, upto_nchanges=None)
-                self._last_truncate_timestamp = datetime.now()
-            time.sleep(0.1)
+    def teardown_replication(self):
+        if self.replication_slots(self.__name):
+            logging.info("Dropping replication slot %s", self.__name)
+            self.drop_replication_slot(self.__name)
 
     def receive(self):
         """
